@@ -6,12 +6,15 @@
 MIRROR="$HOME/.claude/statusline.txt"
 
 echo "== mirror file =="
+MIRROR_STATE=missing
 if [ -e "$MIRROR" ]; then
   ls -l "$MIRROR"
   if [ -s "$MIRROR" ]; then
+    MIRROR_STATE=ok
     echo "content: $(cat "$MIRROR")"
     echo "-> the file is fine; the problem is on the VS Code side (see below)."
   else
+    MIRROR_STATE=empty
     echo "-> the file exists but is EMPTY: your statusLine command ran but printed nothing."
   fi
 else
@@ -76,7 +79,19 @@ else
 fi
 
 echo
-echo "== reminder =="
-echo "statusLine config is read when a Claude Code session starts."
-echo "After install.sh, start a NEW Claude Code session and run one turn,"
-echo "then in VS Code: Cmd+Shift+P -> Developer: Reload Window."
+echo "== verdict =="
+# The test run above creates the mirror file; it is restored to its prior
+# state, so MIRROR_STATE still describes what Claude Code itself has done.
+if [ "$MIRROR_STATE" = ok ]; then
+  echo "Claude Code is writing the mirror file. If VS Code still shows nothing,"
+  echo "check claudeStatusline.file in your VS Code settings, then reload the window."
+elif [ -n "$CMD" ] && [ "${status:-1}" -eq 0 ]; then
+  echo "Your statusLine command works, but Claude Code has never run it here."
+  echo "statusLine config is read when a session starts, so:"
+  echo "  1. quit Claude Code on this machine and start it again"
+  echo "  2. run one turn"
+  echo "  3. ls -l $MIRROR   # should now exist"
+  echo "  4. VS Code: Cmd+Shift+P -> Developer: Reload Window"
+else
+  echo "Your statusLine command itself is failing -- see the stdout/exit status above."
+fi

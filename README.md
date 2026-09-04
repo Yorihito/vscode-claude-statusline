@@ -56,11 +56,13 @@ machine. Run:
     ./scripts/doctor.sh
 
 It reports which settings file defines `statusLine`, whether `jq` is present,
-and runs the configured command against a fake payload so a syntax error or a
-missing dependency shows up directly.
+runs the configured command against a fake payload so a syntax error or a
+missing dependency shows up directly, and ends with a verdict.
 
 The most common cause is simply that Claude Code read its settings at session
-start: after `install.sh`, start a **new** Claude Code session and run one turn.
+start: after `install.sh`, quit Claude Code, start it again, and run one turn.
+The mirror file appears only once Claude Code itself has executed the command
+(the doctor's own test run is undone afterwards, so it does not count).
 
 (An empty `statusline.txt` is a different symptom — the extension hides itself
 entirely rather than showing "no data".)
