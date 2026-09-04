@@ -18,6 +18,7 @@ stale.
     build/                        .vsix packaging metadata (vsixmanifest, [Content_Types].xml)
     scripts/install.sh            build + install + patch Claude Code settings
     scripts/patch-settings.py     mirrors the statusLine output to a file
+    scripts/doctor.sh             diagnose an empty / "no data" status bar
     dist/                         built .vsix (generated)
 
 ## Settings
@@ -45,3 +46,21 @@ have no `statusLine` configured yet and want the default one).
 
 If you already have your own `statusLine` command, the patch wraps it rather
 than replacing it, so your terminal status line is unchanged.
+
+## Troubleshooting
+
+If the status bar shows **Claude: no data**, `~/.claude/statusline.txt` does not
+exist yet — i.e. the `statusLine` command has never produced output on that
+machine. Run:
+
+    ./scripts/doctor.sh
+
+It reports which settings file defines `statusLine`, whether `jq` is present,
+and runs the configured command against a fake payload so a syntax error or a
+missing dependency shows up directly.
+
+The most common cause is simply that Claude Code read its settings at session
+start: after `install.sh`, start a **new** Claude Code session and run one turn.
+
+(An empty `statusline.txt` is a different symptom — the extension hides itself
+entirely rather than showing "no data".)
