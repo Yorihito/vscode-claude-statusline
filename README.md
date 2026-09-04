@@ -1,68 +1,68 @@
 # Claude Code Status Line (VS Code)
 
-Mirrors the Claude Code TUI status line into the VS Code status bar.
+Shows Claude Code's rate limit usage in the VS Code status bar.
 
-Claude Code writes its status line to `~/.claude/statusline.txt` (via the
-`statusLine` command in `~/.claude/settings.json`), and this extension watches
-that file and shows the latest value.
+    ✨ 5h: 12% | 7d: 34%
 
-Note: the underlying data only refreshes when a Claude Code turn runs — rate
-limit percentages come from API responses, so there is nothing to poll between
-turns. The tooltip shows how old the value is, and the entry dims once it is
-stale.
+No Claude Code configuration is required, and you do not need to use the CLI.
+
+## How it gets the numbers
+
+Claude Code keeps a usage cache in `~/.claude.json`
+(`cachedUsageUtilization`) whichever way it was started, so the extension reads
+that. It is a cache with its own refresh schedule, not a live figure — the
+tooltip always says how old the value is, and the entry dims once it is stale.
+
+If you also use the Claude Code **CLI**, you can get per-turn accurate numbers.
+The CLI's TUI runs the `statusLine` command from `~/.claude/settings.json`, and
+`install.sh --mirror` makes that command also write its output to
+`~/.claude/statusline.txt`. The extension prefers that file whenever it is
+newer than the cache.
+
+The VS Code extension runs Claude Code without a TUI (`--output-format
+stream-json`), so it never executes `statusLine` commands. That is why the
+mirror file alone is not enough for a VS Code-only setup, and why the cache is
+the primary source.
 
 ## Layout
 
     package.json                  extension manifest
     src/extension.js              the extension itself
     build/                        .vsix packaging metadata (vsixmanifest, [Content_Types].xml)
-    scripts/install.sh            build + install + patch Claude Code settings
-    scripts/patch-settings.py     mirrors the statusLine output to a file
-    scripts/doctor.sh             diagnose an empty / "no data" status bar
+    scripts/install.sh            build + install (--mirror also patches Claude Code settings)
+    scripts/patch-settings.py     CLI-only: mirrors statusLine output to a file
+    scripts/doctor.sh             diagnose an empty / "no data" entry
     dist/                         built .vsix (generated)
 
 ## Settings
 
-- `claudeStatusline.file` — override the source file path
-- `claudeStatusline.staleMinutes` — when to dim the entry (default 10)
+- `claudeStatusline.staleMinutes` — when to dim the entry (default 60)
 - `claudeStatusline.alignment` — `left` or `right` (default right)
+- `claudeStatusline.file` — override the optional CLI mirror file path
 
-## Installing on another machine
+## Installing
 
 VS Code Settings Sync does not carry locally-installed extensions, so copy this
 folder over (git, scp, Dropbox — anything) and run:
 
-    ./scripts/install.sh
+    ./scripts/install.sh          # VS Code only
+    ./scripts/install.sh --mirror # also set up the CLI statusLine mirror
 
-It builds the `.vsix` locally (no network needed — a vsix is just a zip),
-installs it with `code --install-extension`, and patches `~/.claude/settings.json`
-so the status line is mirrored to `~/.claude/statusline.txt`. Both steps are
-idempotent, and `settings.json` is backed up to `settings.json.bak` first.
+It builds the `.vsix` locally (no network needed — a vsix is just a zip) and
+installs it with `code --install-extension`. Both steps are idempotent, and
+`--mirror` backs up `settings.json` to `settings.json.bak` first, wrapping any
+`statusLine` command you already have rather than replacing it.
 
 Then in VS Code: `Cmd+Shift+P` -> **Developer: Reload Window**.
 
-Requirements: the `code` CLI on PATH, `python3`, `zip`, and `jq` (only if you
-have no `statusLine` configured yet and want the default one).
-
-If you already have your own `statusLine` command, the patch wraps it rather
-than replacing it, so your terminal status line is unchanged.
+Requirements: the `code` CLI on PATH, `python3` and `zip`. `--mirror`
+additionally wants `jq`, and only if you have no `statusLine` configured yet.
 
 ## Troubleshooting
 
-If the status bar shows **Claude: no data**, `~/.claude/statusline.txt` does not
-exist yet — i.e. the `statusLine` command has never produced output on that
-machine. Run:
-
     ./scripts/doctor.sh
 
-It reports which settings file defines `statusLine`, whether `jq` is present,
-runs the configured command against a fake payload so a syntax error or a
-missing dependency shows up directly, and ends with a verdict.
-
-The most common cause is simply that Claude Code read its settings at session
-start: after `install.sh`, quit Claude Code, start it again, and run one turn.
-The mirror file appears only once Claude Code itself has executed the command
-(the doctor's own test run is undone afterwards, so it does not count).
-
-(An empty `statusline.txt` is a different symptom — the extension hides itself
-entirely rather than showing "no data".)
+It reports what each source holds, how stale the cache is, whether the
+extension is installed, and ends with a verdict. The usual answer to **Claude:
+no data** is that Claude Code has not yet run a turn for this account on this
+machine — the VS Code panel counts, the CLI is not required.

@@ -1,12 +1,18 @@
 {
   "name": "claude-statusline-mirror",
   "displayName": "Claude Code Status Line",
-  "description": "Shows the Claude Code status line in the VS Code status bar",
+  "description": "Shows Claude Code's usage limits in the VS Code status bar",
   "version": "0.0.1",
   "publisher": "local",
-  "engines": { "vscode": "^1.75.0" },
-  "categories": ["Other"],
-  "activationEvents": ["onStartupFinished"],
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./src/extension.js",
   "contributes": {
     "commands": [
@@ -21,16 +27,19 @@
         "claudeStatusline.file": {
           "type": "string",
           "default": "",
-          "description": "Path to the mirrored status line file. Empty means ~/.claude/statusline.txt"
+          "description": "Optional CLI statusLine mirror file, used when it is fresher than ~/.claude.json. Empty means ~/.claude/statusline.txt"
         },
         "claudeStatusline.staleMinutes": {
           "type": "number",
-          "default": 10,
+          "default": 60,
           "description": "Dim the status bar entry once the data is older than this many minutes."
         },
         "claudeStatusline.alignment": {
           "type": "string",
-          "enum": ["left", "right"],
+          "enum": [
+            "left",
+            "right"
+          ],
           "default": "right",
           "description": "Which side of the status bar to use (reload required)."
         }

@@ -1,97 +1,69 @@
 #!/usr/bin/env bash
-# Diagnose why the VS Code status bar shows "Claude: no data".
-# Safe to run: it only reads configuration and runs your statusLine command
-# once against a fake payload, restoring the mirror file afterwards.
+# Diagnose an empty or "no data" Claude usage entry in the VS Code status bar.
+# Read-only: it inspects files and reports, it changes nothing.
 
+CLAUDE_JSON="$HOME/.claude.json"
 MIRROR="$HOME/.claude/statusline.txt"
+PRIMARY_OK=0
 
-echo "== mirror file =="
-MIRROR_STATE=missing
-if [ -e "$MIRROR" ]; then
-  ls -l "$MIRROR"
-  if [ -s "$MIRROR" ]; then
-    MIRROR_STATE=ok
-    echo "content: $(cat "$MIRROR")"
-    echo "-> the file is fine; the problem is on the VS Code side (see below)."
-  else
-    MIRROR_STATE=empty
-    echo "-> the file exists but is EMPTY: your statusLine command ran but printed nothing."
-  fi
+echo "== primary source: $CLAUDE_JSON =="
+if [ ! -f "$CLAUDE_JSON" ]; then
+  echo "missing -- Claude Code has never run for this user account on this machine."
 else
-  echo "missing: $MIRROR"
-  echo "-> your statusLine command has never produced output on this machine."
+  python3 - "$CLAUDE_JSON" <<'PY'
+import json, sys, time, pathlib
+try:
+    data = json.loads(pathlib.Path(sys.argv[1]).read_text())
+except json.JSONDecodeError as err:
+    print(f"INVALID JSON ({err})")
+    raise SystemExit(1)
+cached = data.get("cachedUsageUtilization") or {}
+usage = cached.get("utilization") or {}
+if not usage:
+    print("no cachedUsageUtilization yet -- run one Claude Code turn, then re-check.")
+    raise SystemExit(1)
+for key, label in (("five_hour", "5h"), ("seven_day", "7d")):
+    entry = usage.get(key) or {}
+    print(f"  {label}: {entry.get('utilization')}%  resets_at={entry.get('resets_at')}")
+fetched = cached.get("fetchedAtMs")
+if fetched:
+    age = (time.time() * 1000 - fetched) / 60000
+    print(f"  fetched {age:.0f} min ago")
+    print("  note: this is Claude Code's own cache; it lags real usage.")
+raise SystemExit(0)
+PY
+  [ $? -eq 0 ] && PRIMARY_OK=1
 fi
 
 echo
-echo "== settings files that can define statusLine =="
-for f in "$HOME/.claude/settings.json" "$HOME/.claude/settings.local.json" \
-         "$PWD/.claude/settings.json" "$PWD/.claude/settings.local.json"; do
-  [ -f "$f" ] || continue
-  python3 - "$f" <<'PY'
-import json, sys, pathlib
-p = pathlib.Path(sys.argv[1])
-try:
-    data = json.loads(p.read_text())
-except json.JSONDecodeError as err:
-    print(f"{p}: INVALID JSON ({err}) -- Claude Code ignores this file")
-    raise SystemExit
-sl = data.get("statusLine")
-if sl is None:
-    print(f"{p}: no statusLine key")
-else:
-    print(f"{p}:\n  {json.dumps(sl, ensure_ascii=False)}")
-    cmd = sl.get("command") if isinstance(sl, dict) else None
-    if cmd and "statusline.txt" not in cmd:
-        print("  -> this command does NOT write to statusline.txt")
-PY
-done
-
-echo
-echo "== dependencies =="
-command -v jq >/dev/null && echo "jq: $(command -v jq)" || echo "jq: MISSING (the default statusLine command needs it)"
-
-echo
-echo "== running your statusLine command against a fake payload =="
-CMD="$(python3 - <<'PY'
-import json, pathlib
-p = pathlib.Path.home() / ".claude" / "settings.json"
-try:
-    sl = json.loads(p.read_text()).get("statusLine") or {}
-except Exception:
-    sl = {}
-print(sl.get("command", "") if isinstance(sl, dict) else "")
-PY
-)"
-if [ -z "$CMD" ]; then
-  echo "no command configured in ~/.claude/settings.json -- run ./scripts/install.sh"
+echo "== optional source: $MIRROR =="
+if [ -s "$MIRROR" ]; then
+  echo "  content: $(cat "$MIRROR")"
+  echo "  (used when newer than the cache above)"
+elif [ -e "$MIRROR" ]; then
+  echo "  exists but empty"
 else
-  PAYLOAD='{"model":{"display_name":"DoctorTest"},"rate_limits":{"five_hour":{"used_percentage":1},"seven_day":{"used_percentage":2}}}'
-  # The command writes to the mirror file, so keep the real value and put it back.
-  SAVED=""; [ -f "$MIRROR" ] && SAVED="$(cat "$MIRROR")"
-  echo "--- stdout ---"
-  printf '%s' "$PAYLOAD" | bash -c "$CMD"
-  status=$?
-  echo "--- exit status: $status ---"
-  if [ -n "$SAVED" ]; then printf '%s\n' "$SAVED" > "$MIRROR"; else rm -f "$MIRROR"; fi
-  if [ $status -ne 0 ]; then
-    echo "-> the command FAILED. A syntax error here means nothing is ever written."
-  fi
+  echo "  absent -- normal unless you run the CLI and installed with --mirror."
+  echo "  Only the CLI's TUI runs statusLine commands; the VS Code extension does not."
+fi
+
+echo
+echo "== is the extension installed? =="
+if command -v code >/dev/null 2>&1; then
+  code --list-extensions 2>/dev/null | grep -i 'claude-statusline-mirror' \
+    || echo "  NOT installed -- run ./scripts/install.sh"
+else
+  echo "  'code' CLI not on PATH; check the Extensions view manually."
 fi
 
 echo
 echo "== verdict =="
-# The test run above creates the mirror file; it is restored to its prior
-# state, so MIRROR_STATE still describes what Claude Code itself has done.
-if [ "$MIRROR_STATE" = ok ]; then
-  echo "Claude Code is writing the mirror file. If VS Code still shows nothing,"
-  echo "check claudeStatusline.file in your VS Code settings, then reload the window."
-elif [ -n "$CMD" ] && [ "${status:-1}" -eq 0 ]; then
-  echo "Your statusLine command works, but Claude Code has never run it here."
-  echo "statusLine config is read when a session starts, so:"
-  echo "  1. quit Claude Code on this machine and start it again"
-  echo "  2. run one turn"
-  echo "  3. ls -l $MIRROR   # should now exist"
-  echo "  4. VS Code: Cmd+Shift+P -> Developer: Reload Window"
+if [ "$PRIMARY_OK" = 1 ]; then
+  echo "The data the extension needs is present."
+  echo "If the status bar still shows nothing:"
+  echo "  VS Code: Cmd+Shift+P -> Developer: Reload Window"
+  echo "  then click the status bar entry to force a refresh."
 else
-  echo "Your statusLine command itself is failing -- see the stdout/exit status above."
+  echo "No usage data on this machine yet. Run one Claude Code turn"
+  echo "(the VS Code panel is enough -- the CLI is not required), then re-run this."
 fi
