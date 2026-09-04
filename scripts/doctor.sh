@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
-# Diagnose an empty or "no data" Claude usage entry in the VS Code status bar.
-# Read-only: it inspects files and reports, it changes nothing.
+# Report what the extension can see. Read-only.
 
 CLAUDE_JSON="$HOME/.claude.json"
-MIRROR="$HOME/.claude/statusline.txt"
-PRIMARY_OK=0
 
-echo "== primary source: $CLAUDE_JSON =="
+echo "== $CLAUDE_JSON =="
 if [ ! -f "$CLAUDE_JSON" ]; then
-  echo "missing -- Claude Code has never run for this user account on this machine."
+  echo "missing -- Claude Code has never run for this account on this machine."
+  OK=1
 else
   python3 - "$CLAUDE_JSON" <<'PY'
-import json, sys, time, pathlib
+import json, sys, time, pathlib, datetime
 try:
     data = json.loads(pathlib.Path(sys.argv[1]).read_text())
 except json.JSONDecodeError as err:
@@ -19,36 +17,32 @@ except json.JSONDecodeError as err:
     raise SystemExit(1)
 cached = data.get("cachedUsageUtilization") or {}
 usage = cached.get("utilization") or {}
-if not usage:
-    print("no cachedUsageUtilization yet -- run one Claude Code turn, then re-check.")
+if not usage or not cached.get("fetchedAtMs"):
+    print("no cachedUsageUtilization yet -- open /usage in Claude Code once.")
     raise SystemExit(1)
+fetched = cached["fetchedAtMs"]
+when = datetime.datetime.fromtimestamp(fetched / 1000).strftime("%H:%M:%S")
+age = (time.time() * 1000 - fetched) / 60000
+print(f"  fetched at {when} ({age:.0f} min ago)")
+now = time.time()
 for key, label in (("five_hour", "5h"), ("seven_day", "7d")):
     entry = usage.get(key) or {}
-    print(f"  {label}: {entry.get('utilization')}%  resets_at={entry.get('resets_at')}")
-fetched = cached.get("fetchedAtMs")
-if fetched:
-    age = (time.time() * 1000 - fetched) / 60000
-    print(f"  fetched {age:.0f} min ago")
-    print("  note: this is Claude Code's own cache; it lags real usage.")
+    resets = entry.get("resets_at")
+    note = ""
+    if resets:
+        try:
+            ts = datetime.datetime.fromisoformat(resets).timestamp()
+            note = "  [window has since reset -- figure is obsolete]" if ts <= now else ""
+        except ValueError:
+            pass
+    print(f"  {label}: {entry.get('utilization')}%  resets_at={resets}{note}")
 raise SystemExit(0)
 PY
-  [ $? -eq 0 ] && PRIMARY_OK=1
+  OK=$?
 fi
 
 echo
-echo "== optional source: $MIRROR =="
-if [ -s "$MIRROR" ]; then
-  echo "  content: $(cat "$MIRROR")"
-  echo "  (used when newer than the cache above)"
-elif [ -e "$MIRROR" ]; then
-  echo "  exists but empty"
-else
-  echo "  absent -- normal unless you run the CLI and installed with --mirror."
-  echo "  Only the CLI's TUI runs statusLine commands; the VS Code extension does not."
-fi
-
-echo
-echo "== is the extension installed? =="
+echo "== extension installed? =="
 if command -v code >/dev/null 2>&1; then
   code --list-extensions 2>/dev/null | grep -i 'claude-statusline-mirror' \
     || echo "  NOT installed -- run ./scripts/install.sh"
@@ -58,12 +52,10 @@ fi
 
 echo
 echo "== verdict =="
-if [ "$PRIMARY_OK" = 1 ]; then
-  echo "The data the extension needs is present."
-  echo "If the status bar still shows nothing:"
-  echo "  VS Code: Cmd+Shift+P -> Developer: Reload Window"
-  echo "  then click the status bar entry to force a refresh."
+if [ "${OK:-1}" = 0 ]; then
+  echo "The extension has a figure to show."
+  echo "It only advances when you open /usage in Claude Code -- by design,"
+  echo "that is the only thing that refreshes this cache. See the README."
 else
-  echo "No usage data on this machine yet. Run one Claude Code turn"
-  echo "(the VS Code panel is enough -- the CLI is not required), then re-run this."
+  echo "Nothing to show yet. Open /usage in Claude Code once, then re-run this."
 fi

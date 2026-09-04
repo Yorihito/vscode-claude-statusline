@@ -3,19 +3,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// Claude Code caches the account's usage utilisation here regardless of how it
-// was started, so this works for people who only ever use the VS Code
-// extension and never launch the CLI.
+// The only account-wide usage figure Claude Code puts on disk. It is a cache:
+// Claude Code refreshes it when the /usage view fetches from the API, and skips
+// the write if the existing entry is under 5 minutes old. Nothing else updates
+// it -- not a turn, not a session start. See README "What this can and cannot
+// show" for how that was established.
 const CLAUDE_JSON = path.join(os.homedir(), '.claude.json');
 
-// Optional, and more accurate when present: a statusLine command run by the
-// CLI's TUI can mirror its output to a file (see scripts/patch-settings.py).
-// The VS Code extension runs Claude Code without a TUI, so it never produces
-// this — it is a bonus for CLI users, not a requirement.
-const DEFAULT_MIRROR = path.join(os.homedir(), '.claude', 'statusline.txt');
-
 let item;
-let watched = [];
 let ageTimer;
 let lastGood;
 
@@ -23,10 +18,9 @@ function config() {
   return vscode.workspace.getConfiguration('claudeStatusline');
 }
 
-function mirrorFile() {
-  const custom = (config().get('file') || '').trim();
-  if (!custom) return DEFAULT_MIRROR;
-  return custom.startsWith('~') ? path.join(os.homedir(), custom.slice(1)) : custom;
+function clockOf(ms) {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 function describeAge(ms) {
@@ -47,100 +41,71 @@ function describeIn(ms) {
   return `in ${Math.round(hours / 24)}d`;
 }
 
-function pct(entry) {
-  const value = entry && entry.utilization;
-  return typeof value === 'number' ? Math.round(value) : null;
-}
-
-function readClaudeJson() {
+function read() {
   let cached;
   try {
-    // This file is rewritten often, so a read can land mid-write; the caller
-    // keeps the previous value rather than flashing "no data".
+    // Claude Code rewrites this file often, so a read can land mid-write; the
+    // caller keeps the previous value rather than flashing "no data".
     cached = JSON.parse(fs.readFileSync(CLAUDE_JSON, 'utf8')).cachedUsageUtilization;
   } catch (err) {
     return null;
   }
   const usage = cached && cached.utilization;
-  if (!usage) return null;
+  if (!usage || !cached.fetchedAtMs) return null;
 
-  const five = pct(usage.five_hour);
-  const week = pct(usage.seven_day);
+  const windows = [['5h', usage.five_hour], ['7d', usage.seven_day]];
   const parts = [];
-  if (five !== null) parts.push(`5h: ${five}%`);
-  if (week !== null) parts.push(`7d: ${week}%`);
+  const resets = [];
+  for (const [label, entry] of windows) {
+    if (!entry || typeof entry.utilization !== 'number') continue;
+    parts.push(`${label}: ${Math.round(entry.utilization)}%`);
+    const at = entry.resets_at && Date.parse(entry.resets_at);
+    if (!at) continue;
+    // A window that has already rolled over makes the cached percentage
+    // meaningless rather than merely old, so say so instead of "resets now".
+    resets.push(
+      at <= Date.now()
+        ? `${label} window has since reset — this figure is obsolete`
+        : `${label} resets ${describeIn(at - Date.now())}`
+    );
+  }
   if (!parts.length) return null;
 
-  const resets = [];
-  for (const [label, entry] of [['5h', usage.five_hour], ['7d', usage.seven_day]]) {
-    const at = entry && entry.resets_at && Date.parse(entry.resets_at);
-    if (at) resets.push(`${label} resets ${describeIn(at - Date.now())}`);
-  }
-
-  return {
-    text: parts.join(' | '),
-    at: cached.fetchedAtMs || 0,
-    detail: resets.join(' · '),
-    origin: `\`~/.claude.json\` — Claude Code's cached usage, refreshed on its own schedule`
-  };
-}
-
-function readMirror() {
-  const file = mirrorFile();
-  try {
-    const text = fs.readFileSync(file, 'utf8').trim();
-    if (!text) return null;
-    return {
-      text: text.split('\n')[0],
-      at: fs.statSync(file).mtimeMs,
-      detail: '',
-      origin: `\`${file}\` — written by a CLI statusLine command`
-    };
-  } catch (err) {
-    return null;
-  }
+  return { text: parts.join(' | '), at: cached.fetchedAtMs, resets: resets.join(' · ') };
 }
 
 function render() {
-  const candidates = [readClaudeJson(), readMirror()].filter(Boolean);
-  const best = candidates.length
-    ? candidates.reduce((a, b) => (b.at > a.at ? b : a))
-    : lastGood;
+  const data = read() || lastGood;
 
-  if (!best) {
+  if (!data) {
     item.text = '$(sparkle) Claude: no data';
     item.tooltip = new vscode.MarkdownString(
-      'No usage data yet.\n\n' +
-        `Looked in \`${CLAUDE_JSON}\` and \`${mirrorFile()}\`.\n\n` +
-        'Run one Claude Code turn on this machine, then click here to refresh.'
+      `No usage figure in \`${CLAUDE_JSON}\` yet.\n\n` +
+        'Open **/usage** in Claude Code once — that is what populates it.'
     );
     item.color = new vscode.ThemeColor('descriptionForeground');
     item.show();
     return;
   }
-  lastGood = best;
+  lastGood = data;
 
-  const age = Date.now() - best.at;
+  const age = Date.now() - data.at;
   const staleMs = Math.max(0, config().get('staleMinutes', 60)) * 60000;
 
-  item.text = `$(sparkle) ${best.text}`;
+  // The clock time is part of the label, not just the tooltip: this figure is
+  // routinely hours old and a bare percentage would read as current.
+  item.text = `$(sparkle) ${data.text} · ${clockOf(data.at)}`;
   item.tooltip = new vscode.MarkdownString(
-    `**Claude Code usage**\n\n\`\`\`\n${best.text}\n\`\`\`\n\n` +
-      (best.detail ? `${best.detail}\n\n` : '') +
-      `Updated ${describeAge(age)}.\n\n` +
-      `Source: ${best.origin}`
+    `**Claude Code usage — as of ${clockOf(data.at)} (${describeAge(age)})**\n\n` +
+      `\`\`\`\n${data.text}\n\`\`\`\n\n` +
+      (data.resets ? `${data.resets}\n\n` : '') +
+      'This is Claude Code’s cached figure. It only refreshes when the ' +
+      '**/usage** view fetches from the API, so it does not move as you work. ' +
+      'Open /usage to bring it up to date.\n\n' +
+      `Source: \`${CLAUDE_JSON}\``
   );
   item.color = staleMs > 0 && age > staleMs ? new vscode.ThemeColor('descriptionForeground') : undefined;
   item.show();
-}
-
-function watch() {
-  const files = [CLAUDE_JSON, mirrorFile()];
-  if (files.length === watched.length && files.every((f, i) => f === watched[i])) return;
-  for (const f of watched) fs.unwatchFile(f);
-  watched = files;
-  // watchFile polls, so it also fires when a file is first created or replaced.
-  for (const f of watched) fs.watchFile(f, { interval: 2000 }, render);
 }
 
 function activate(context) {
@@ -153,30 +118,25 @@ function activate(context) {
   context.subscriptions.push(item);
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('claudeStatusline.refresh', () => {
-      watch();
-      render();
-    })
+    vscode.commands.registerCommand('claudeStatusline.refresh', render)
   );
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('claudeStatusline')) {
-        watch();
-        render();
-      }
+      if (e.affectsConfiguration('claudeStatusline')) render();
     })
   );
 
-  watch();
+  // watchFile polls, so it also fires when the file is first created or replaced.
+  fs.watchFile(CLAUDE_JSON, { interval: 2000 }, render);
   render();
 
-  // Keep the "updated N min ago" tooltip and the stale colour honest.
+  // Keep the "as of" age and the stale colour honest.
   ageTimer = setInterval(render, 60000);
   context.subscriptions.push({
     dispose() {
       clearInterval(ageTimer);
-      for (const f of watched) fs.unwatchFile(f);
+      fs.unwatchFile(CLAUDE_JSON);
     }
   });
 }

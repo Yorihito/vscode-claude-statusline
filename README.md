@@ -1,68 +1,71 @@
-# Claude Code Status Line (VS Code)
+# Claude Code Usage (VS Code)
 
-Shows Claude Code's rate limit usage in the VS Code status bar.
+Shows Claude Code's rate limit usage in the VS Code status bar, with the time
+the figure was taken:
 
-    ✨ 5h: 12% | 7d: 34%
+    ✨ 5h: 12% | 7d: 34% · 13:50
 
-No Claude Code configuration is required, and you do not need to use the CLI.
+**Read "What this can and cannot show" before installing.** The figure does not
+advance as you work. That is a limitation of what Claude Code puts on disk, not
+a bug here, and it is the reason the timestamp is part of the label.
 
-## How it gets the numbers
+## What this can and cannot show
 
-Claude Code keeps a usage cache in `~/.claude.json`
-(`cachedUsageUtilization`) whichever way it was started, so the extension reads
-that. It is a cache with its own refresh schedule, not a live figure — the
-tooltip always says how old the value is, and the entry dims once it is stale.
+Claude Code knows your live usage — every API response carries
+`anthropic-ratelimit-unified-5h-utilization` and friends, and that is what the
+in-panel "You've used N% of your session limit" banner reports. That value
+lives in the `claude` process's memory (`rawUtilization`) and is never written
+anywhere another program can read.
 
-If you also use the Claude Code **CLI**, you can get per-turn accurate numbers.
-The CLI's TUI runs the `statusLine` command from `~/.claude/settings.json`, and
-`install.sh --mirror` makes that command also write its output to
-`~/.claude/statusline.txt`. The extension prefers that file whenever it is
-newer than the cache.
+What *is* on disk is `cachedUsageUtilization` in `~/.claude.json`, which this
+extension reads. Claude Code writes it in exactly one place: after the
+**/usage** view fetches `GET /api/oauth/usage`, and only if the stored entry is
+already more than 5 minutes old. No turn, no session start and no hook
+refreshes it. So the number moves when you open /usage, and at no other time.
 
-The VS Code extension runs Claude Code without a TUI (`--output-format
-stream-json`), so it never executes `statusLine` commands. That is why the
-mirror file alone is not enough for a VS Code-only setup, and why the cache is
-the primary source.
+Routes that were checked and do not work:
+
+| Route | Result |
+|---|---|
+| Live response headers | In-process only; not on disk |
+| `statusLine` command | Its payload has `rate_limits`, but only the CLI's TUI runs it — verified with a sentinel file that survived VS Code turn boundaries |
+| CLI `statusLine` mirror file | Reports the *CLI process's* own observations, so work done in VS Code never appears. Observed 51% in the mirror while the real figure was 91% |
+| Hook payloads | The base hook input schema has no `rate_limits` |
+| OpenTelemetry | No rate-limit metric is emitted |
+| Claude Code's VS Code extension | Exports no API; its commands are UI actions only |
+| Local relay via `ANTHROPIC_BASE_URL` | OAuth sessions use a hardcoded `https://api.anthropic.com/` plus a host allowlist |
+
+A proper fix needs Claude Code to expose the data — `statusLine` support in the
+VS Code extension, or `rate_limits` in a hook payload.
 
 ## Layout
 
-    package.json                  extension manifest
-    src/extension.js              the extension itself
-    build/                        .vsix packaging metadata (vsixmanifest, [Content_Types].xml)
-    scripts/install.sh            build + install (--mirror also patches Claude Code settings)
-    scripts/patch-settings.py     CLI-only: mirrors statusLine output to a file
-    scripts/doctor.sh             diagnose an empty / "no data" entry
-    dist/                         built .vsix (generated)
+    package.json          extension manifest
+    src/extension.js      the extension itself
+    build/                .vsix packaging metadata
+    scripts/install.sh    build + install
+    scripts/doctor.sh     report what the extension can see
+    dist/                 built .vsix (generated)
 
 ## Settings
 
 - `claudeStatusline.staleMinutes` — when to dim the entry (default 60)
 - `claudeStatusline.alignment` — `left` or `right` (default right)
-- `claudeStatusline.file` — override the optional CLI mirror file path
 
 ## Installing
 
-VS Code Settings Sync does not carry locally-installed extensions, so copy this
-folder over (git, scp, Dropbox — anything) and run:
-
-    ./scripts/install.sh          # VS Code only
-    ./scripts/install.sh --mirror # also set up the CLI statusLine mirror
+    ./scripts/install.sh
 
 It builds the `.vsix` locally (no network needed — a vsix is just a zip) and
-installs it with `code --install-extension`. Both steps are idempotent, and
-`--mirror` backs up `settings.json` to `settings.json.bak` first, wrapping any
-`statusLine` command you already have rather than replacing it.
+installs it with `code --install-extension`. It changes no Claude Code
+configuration. Then in VS Code: `Cmd+Shift+P` -> **Developer: Reload Window**.
 
-Then in VS Code: `Cmd+Shift+P` -> **Developer: Reload Window**.
-
-Requirements: the `code` CLI on PATH, `python3` and `zip`. `--mirror`
-additionally wants `jq`, and only if you have no `statusLine` configured yet.
+Requirements: the `code` CLI on PATH, `python3` and `zip`.
 
 ## Troubleshooting
 
     ./scripts/doctor.sh
 
-It reports what each source holds, how stale the cache is, whether the
-extension is installed, and ends with a verdict. The usual answer to **Claude:
-no data** is that Claude Code has not yet run a turn for this account on this
-machine — the VS Code panel counts, the CLI is not required.
+**Claude: no data** means `~/.claude.json` has no `cachedUsageUtilization` yet —
+open /usage in Claude Code once. If the tooltip says a window *has since reset*,
+the cached percentage is not merely old but obsolete; open /usage again.

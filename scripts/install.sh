@@ -1,22 +1,7 @@
 #!/usr/bin/env bash
-# Build and install the Claude Code status line extension on this machine.
-#
-# The extension reads ~/.claude.json, which Claude Code maintains whichever way
-# it was started, so no Claude Code configuration is required.
-#
-#   --mirror   also patch ~/.claude/settings.json so a CLI statusLine command
-#              mirrors its output to a file. Only the CLI's TUI runs that
-#              command, but it is per-turn fresh, so the extension prefers it
-#              when it is newer. Pointless if you never use the CLI.
+# Build and install the Claude Code usage indicator on this machine.
+# It reads ~/.claude.json and changes no Claude Code configuration.
 set -euo pipefail
-
-MIRROR=0
-for arg in "$@"; do
-  case "$arg" in
-    --mirror) MIRROR=1 ;;
-    *) echo "usage: $0 [--mirror]" >&2; exit 2 ;;
-  esac
-done
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
@@ -44,10 +29,7 @@ rm -f "$VSIX"
 echo "built $VSIX"
 
 code --install-extension "$VSIX" --force
-if [ "$MIRROR" = 1 ]; then
-  python3 "$HERE/patch-settings.py"
-fi
 
 echo
 echo "Done. In VS Code run: Cmd+Shift+P -> Developer: Reload Window"
-echo "The status bar fills in once Claude Code has run at least one turn here."
+echo "The entry fills in once you have opened /usage in Claude Code at least once."
